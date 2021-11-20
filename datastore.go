@@ -170,6 +170,10 @@ func queryWithCursor(cursor *bbolt.Cursor, q query.Query, ktype dskey.KeyType) (
 		if checkPrefix && !bytes.HasPrefix(k, pref) {
 			break
 		}
+		// strictly equal to prefix is not allowed
+		if checkPrefix && bytes.Equal(k, pref) {
+			continue
+		}
 		if checkRangeEnd && bytes.Compare(end, k) <= 0 {
 			break
 		}

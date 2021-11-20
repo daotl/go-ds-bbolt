@@ -146,7 +146,7 @@ func Test_Datastore(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(res) != 2 {
+		if len(res) != 1 {
 			fmt.Printf("only found %v results \n", len(res))
 			for _, v := range res {
 				fmt.Printf("%+v\n", v)
