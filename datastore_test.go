@@ -252,7 +252,5 @@ func TestSuite(t *testing.T) {
 			fmt.Println(err)
 		}
 	}(ds)
-	// avoid running SubtestCombinations, it is expensive
-	dstest.BasicSubtests = dstest.BasicSubtests[0 : len(dstest.BasicSubtests)-1]
 	dstest.SubtestAll(t, dskey.KeyTypeBytes, ds)
 }
