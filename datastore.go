@@ -119,24 +119,21 @@ func keyTypeMismatch(q dskey.Key, keyType dskey.KeyType) bool {
 	return false
 }
 
-func queryWithCursor(cursor *bbolt.Cursor, q query.Query, ktype dskey.KeyType) (query.Results, error) {
+func queryWithCursor(cursor *bbolt.Cursor, q query.Query, ktype dskey.KeyType, closef func() error) (query.Results, error) {
 	if keyTypeMismatch(q.Prefix, ktype) ||
 		keyTypeMismatch(q.Range.Start, ktype) ||
 		keyTypeMismatch(q.Range.End, ktype) {
 		return nil, ErrKeyTypeNotMatch
 	}
 
-	var cursorStart []byte = []byte{}
-	checkPrefix := false
-	var pref []byte
+	qNaive := q // copy of q
+	var cursorStart []byte
+	var cursorEnd []byte
 
 	if q.Prefix != nil {
-		checkPrefix = true
-		pref = q.Prefix.Bytes()
-
 		switch ktype {
 		case dskey.KeyTypeBytes:
-			cursorStart = pref
+			cursorStart, cursorEnd = bytesPrefix(q.Prefix.Bytes())
 		case dskey.KeyTypeString:
 			// not supported now
 			return nil, ErrKeyTypeNotMatch
@@ -149,7 +146,7 @@ func queryWithCursor(cursor *bbolt.Cursor, q query.Query, ktype dskey.KeyType) (
 		switch ktype {
 		case dskey.KeyTypeBytes:
 			rangeStartBytes := rangeStartKey.Bytes()
-			if bytes.Compare(cursorStart, rangeStartBytes) < 0 {
+			if len(cursorStart) == 0 || bytes.Compare(cursorStart, rangeStartBytes) < 0 {
 				cursorStart = rangeStartBytes
 			}
 		case dskey.KeyTypeString:
@@ -157,30 +154,95 @@ func queryWithCursor(cursor *bbolt.Cursor, q query.Query, ktype dskey.KeyType) (
 			return nil, ErrKeyTypeNotMatch
 		}
 	}
-	checkRangeEnd := false
-	var end []byte
+
+	// cursor end with min(prefix limit, range.end)
 	if q.Range.End != nil {
-		checkRangeEnd = true
-		end = q.Range.End.Bytes()
+		rangeEndKey := q.Range.End
+		switch ktype {
+		case dskey.KeyTypeBytes:
+			rangeEndBytes := rangeEndKey.Bytes()
+			if len(cursorEnd) == 0 || bytes.Compare(rangeEndBytes, cursorEnd) < 0 {
+				cursorEnd = rangeEndBytes
+			}
+		case dskey.KeyTypeString:
+			// not supported now
+			return nil, ErrKeyTypeNotMatch
+		}
 	}
 
-	var entries []query.Entry
-
-	for k, v := cursor.Seek(cursorStart); k != nil; k, v = cursor.Next() {
-		if checkPrefix && !bytes.HasPrefix(k, pref) {
-			break
+	firstKv := func() ([]byte, []byte) {
+		if len(cursorStart) == 0 {
+			return cursor.First()
+		} else {
+			return cursor.Seek(cursorStart)
 		}
-		// strictly equal to prefix is not allowed
-		if checkPrefix && bytes.Equal(k, pref) {
-			continue
-		}
-		if checkRangeEnd && bytes.Compare(end, k) <= 0 {
-			break
-		}
-		entries = append(entries, toQueryEntry(k, v, q.KeysOnly))
 	}
-	results := query.ResultsWithEntries(q, entries)
-	results = query.NaiveQueryApply(q, results)
+	validate := func(k []byte) bool {
+		if k == nil {
+			return false
+		}
+		if len(cursorEnd) != 0 && bytes.Compare(k, cursorEnd) >= 0 {
+			return false
+		}
+		return true
+	}
+	next := cursor.Next
+	if len(q.Orders) > 0 {
+		switch q.Orders[0].(type) {
+		case query.OrderByKey, *query.OrderByKey:
+			qNaive.Orders = nil
+		case query.OrderByKeyDescending, *query.OrderByKeyDescending:
+			next = cursor.Prev
+			firstKv = func() ([]byte, []byte) {
+				if len(cursorEnd) == 0 {
+					return cursor.Last()
+				}
+				cursor.Seek(cursorEnd)
+				return cursor.Prev()
+			}
+			validate = func(k []byte) bool {
+				if k == nil {
+					return false
+				}
+				if len(cursorStart) != 0 && bytes.Compare(k, cursorEnd) < 0 {
+					return false
+				}
+				return true
+			}
+			qNaive.Orders = nil
+		default:
+		}
+	}
+
+	qNaive.Prefix = nil
+	qNaive.Range = query.Range{}
+
+	started := false
+	results := query.ResultsFromIterator(q, query.Iterator{
+		Next: func() (query.Result, bool) {
+			var k, v []byte
+			if !started {
+				k, v = firstKv()
+				started = true
+			} else {
+				k, v = next()
+			}
+			if validate(k) == false {
+				return query.Result{}, false
+			}
+			return query.Result{
+				Entry: toQueryEntry(k, v, q.KeysOnly),
+			}, true
+		},
+		Close: func() error {
+			if closef != nil {
+				return closef()
+			}
+			return nil
+		},
+	})
+
+	results = query.NaiveQueryApply(qNaive, results)
 	return results, nil
 }
 
@@ -190,11 +252,14 @@ func queryWithCursor(cursor *bbolt.Cursor, q query.Query, ktype dskey.KeyType) (
 // https://github.com/etcd-io/bbolt#prefix-scans
 func (d *Datastore) Query(ctx context.Context, q query.Query) (query.Results, error) {
 	var results query.Results
-	err := d.db.View(func(tx *bbolt.Tx) error {
-		cursor := tx.Bucket(d.bucket).Cursor()
-		var err error
-		results, err = queryWithCursor(cursor, q, d.ktype)
-		return err
+	tx, err := d.db.Begin(false)
+	if err != nil {
+		return nil, err
+	}
+	bucket := tx.Bucket(d.bucket)
+	cursor := bucket.Cursor()
+	results, err = queryWithCursor(cursor, q, d.ktype, func() error {
+		return tx.Rollback()
 	})
 
 	return results, err

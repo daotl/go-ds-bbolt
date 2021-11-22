@@ -1,6 +1,7 @@
 package dsbbolt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
@@ -11,8 +12,11 @@ import (
 	dskey "github.com/daotl/go-datastore/key"
 	"github.com/daotl/go-datastore/query"
 	dstest "github.com/daotl/go-datastore/test"
+	"github.com/stretchr/testify/assert"
 	"go.etcd.io/bbolt"
 )
+
+var bg = context.Background()
 
 func Test_NewDatastore(t *testing.T) {
 	type args struct {
@@ -196,15 +200,44 @@ func Test_Datastore(t *testing.T) {
 		}
 	})
 
-	//t.Run("txn", func(t *testing.T) {
-	//	tx, err := ds.NewTransaction(ctx, false)
-	//	if err != nil {
-	//		t.Error(err)
-	//	}
-	//	if err := tx.Commit(ctx); err != nil {
-	//		t.Error(err)
-	//	}
-	//})
+}
+
+func TestTxn(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "bolt")
+	ds, err := NewDatastore(tmpFile, nil, nil, dskey.KeyTypeBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ds.Close()
+	ctx := context.Background()
+	tx, err := ds.NewTransaction(ctx, false)
+	assert.NoError(t, err)
+
+	k := dskey.NewBytesKeyFromString("hi")
+	val := []byte("hi")
+	err = tx.Put(bg, k, val)
+	assert.NoError(t, err)
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Error(err)
+	}
+
+	tx1, err := ds.NewTransaction(ctx, true)
+	assert.NoError(t, err)
+
+	v, err := tx1.Get(bg, k)
+	assert.NoError(t, err)
+
+	if !bytes.Equal(v, val) {
+		t.Error("get wrong value")
+	}
+	results, err := tx1.Query(bg, query.Query{Range: query.Range{Start: k}})
+	assert.NoError(t, err)
+
+	entries, err := results.Rest()
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(entries))
+	tx1.Discard(ctx)
 }
 
 func TestSuite(t *testing.T) {

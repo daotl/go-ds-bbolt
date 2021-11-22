@@ -11,7 +11,7 @@ import (
 )
 
 func (d *Datastore) NewTransaction(ctx context.Context, readOnly bool) (datastore.Txn, error) {
-	tx, err := d.db.Begin(readOnly)
+	tx, err := d.db.Begin(!readOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +26,7 @@ type txn struct {
 	ktype  dskey.KeyType
 }
 
-func (b *txn) Get(ctx context.Context, key dskey.Key) (value []byte, err error) {
+func (b *txn) Get(ctx context.Context, key dskey.Key) ([]byte, error) {
 	if key.KeyType() != b.ktype {
 		return nil, ErrKeyTypeNotMatch
 	}
@@ -35,7 +35,7 @@ func (b *txn) Get(ctx context.Context, key dskey.Key) (value []byte, err error) 
 	if data == nil {
 		return nil, datastore.ErrNotFound
 	}
-	return copyBytes(value), nil
+	return copyBytes(data), nil
 }
 
 func (b *txn) Has(ctx context.Context, key dskey.Key) (exists bool, err error) {
@@ -50,7 +50,7 @@ func (b *txn) Has(ctx context.Context, key dskey.Key) (exists bool, err error) {
 	return true, nil
 }
 
-func (b *txn) GetSize(ctx context.Context, key dskey.Key) (size int, err error) {
+func (b *txn) GetSize(ctx context.Context, key dskey.Key) (int, error) {
 	if key.KeyType() != b.ktype {
 		return -1, ErrKeyTypeNotMatch
 	}
@@ -64,7 +64,7 @@ func (b *txn) GetSize(ctx context.Context, key dskey.Key) (size int, err error) 
 
 func (b *txn) Query(ctx context.Context, q query.Query) (query.Results, error) {
 	cursor := b.bucket.Cursor()
-	return queryWithCursor(cursor, q, b.ktype)
+	return queryWithCursor(cursor, q, b.ktype, nil)
 }
 
 func (b *txn) Put(ctx context.Context, key dskey.Key, value []byte) error {
@@ -81,10 +81,13 @@ func (b *txn) Delete(ctx context.Context, key dskey.Key) error {
 	return b.bucket.Delete(key.Bytes())
 }
 
+// Commit calls the underlying bolt Commit
 func (b *txn) Commit(ctx context.Context) error {
 	return b.tx.Commit()
 }
 
+// Discard calls the underlying bolt Rollback. It closes the transaction and ignores all previous updates.
+// Read-only transactions must be rolled back and not committed.
 func (b *txn) Discard(ctx context.Context) {
 	err := b.tx.Rollback()
 	if err != nil {
