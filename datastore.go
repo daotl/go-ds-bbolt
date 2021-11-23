@@ -204,7 +204,7 @@ func queryWithCursor(cursor *bbolt.Cursor, q query.Query, ktype dskey.KeyType, c
 				if k == nil {
 					return false
 				}
-				if len(cursorStart) != 0 && bytes.Compare(k, cursorEnd) < 0 {
+				if len(cursorStart) != 0 && bytes.Compare(k, cursorStart) < 0 {
 					return false
 				}
 				return true
