@@ -2,7 +2,6 @@ package dsbbolt
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/daotl/go-datastore"
 	dskey "github.com/daotl/go-datastore/key"
@@ -89,9 +88,6 @@ func (b *txn) Commit(ctx context.Context) error {
 // Discard calls the underlying bolt Rollback. It closes the transaction and ignores all previous updates.
 // Read-only transactions must be rolled back and not committed.
 func (b *txn) Discard(ctx context.Context) {
-	err := b.tx.Rollback()
-	if err != nil {
-		fmt.Println("bolt rollback err", err)
-	}
+	b.tx.Rollback()
 	return
 }
